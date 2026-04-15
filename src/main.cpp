@@ -1,5 +1,6 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
+#include <WiFiClientSecure.h> // Wajib ditambahkan untuk koneksi HTTPS
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
 #include <WiFiManager.h>
@@ -7,12 +8,15 @@
 #define TRIG 5
 #define ECHO 18
 #define BUZZER 23
+#define RESET_PIN 0 // Menggunakan tombol BOOT bawaan ESP32 untuk reset WiFi
 
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 
 long duration;
 float distance;
-char serverIp[40] = "192.168.43.204"; 
+
+// URL Server Hosting Anda (Sudah Fix)
+const char* serverUrl = "https://sentinel.wuaze.com/api/kirim-data";
 
 // Variabel untuk menyimpan izin menyalakan buzzer dari Web
 bool buzzerAllowed = true; 
@@ -23,6 +27,7 @@ void setup() {
   pinMode(TRIG, OUTPUT);
   pinMode(ECHO, INPUT);
   pinMode(BUZZER, OUTPUT);
+  pinMode(RESET_PIN, INPUT_PULLUP); // Setup pin tombol reset
 
   Wire.begin(21, 22);
   lcd.init();
@@ -31,10 +36,23 @@ void setup() {
   lcd.print("Setup WiFi...");
 
   WiFiManager wm;
-  WiFiManagerParameter custom_server_ip("server", "IP Server Laravel", serverIp, 40);
-  wm.addParameter(&custom_server_ip);
 
-  if (!wm.autoConnect("PINTU")) {
+  // --- FITUR RESET WIFI ---
+  // Jika tombol BOOT (Pin 0) ditahan saat ESP32 dinyalakan, WiFi akan di-reset
+  // if (digitalRead(RESET_PIN) == LOW) {
+  //   Serial.println("Tombol Reset Ditekan! Menghapus pengaturan WiFi...");
+  //   lcd.clear();
+  //   lcd.print("Reset WiFi...");
+  //   wm.resetSettings(); // Menghapus credential WiFi yang tersimpan
+  //   delay(2000);
+  // }
+
+  // OPSIONAL: Jika Anda ingin ESP32 SELALU minta WiFi baru setiap di-restart (tanpa tekan tombol),
+  // hapus tanda // pada baris di bawah ini:
+  wm.resetSettings(); 
+
+  // Memulai portal WiFi (Nama WiFi: "PINTU_AP")
+  if (!wm.autoConnect("PINTU_AP")) {
     Serial.println("Gagal terhubung dan timeout");
     delay(3000);
     ESP.restart();
@@ -42,8 +60,7 @@ void setup() {
 
   lcd.clear();
   lcd.print("WiFi Connected!");
-  strcpy(serverIp, custom_server_ip.getValue());
-  Serial.print("IP Server: "); Serial.println(serverIp);
+  Serial.println("WiFi Connected!");
 }
 
 void loop() {
@@ -57,34 +74,45 @@ void loop() {
   
   String statusPintu = (distance < 50) ? "ADA ORANG" : "AMAN";
 
-  // 2. KIRIM DATA KE LARAVEL DULU & MINTA STATUS BUZZER
+  // 2. KIRIM DATA KE LARAVEL & MINTA STATUS BUZZER
   if(WiFi.status() == WL_CONNECTED){
-    HTTPClient http;
-    String serverName = "http://" + String(serverIp) + ":8000/api/kirim-data";
     
-    http.begin(serverName);
+    // Konfigurasi HTTPS Aman namun di-set Insecure agar bypass cek sertifikat SSL (mempercepat proses)
+    WiFiClientSecure client;
+    client.setInsecure(); 
+
+    HTTPClient http;
+    http.begin(client, serverUrl); // Menggunakan client secure + URL HTTPS
     http.addHeader("Content-Type", "application/json");
 
     String httpRequestData = "{\"jarak\":" + String(distance) + ",\"status\":\"" + statusPintu + "\"}";
+    
+    // Kirim Data POST
     int httpResponseCode = http.POST(httpRequestData);
 
     if (httpResponseCode > 0) {
       String payload = http.getString();
       
-      // Tampilkan balasan Laravel di Serial Monitor untuk memastikan
+      // Tampilkan balasan Server Web di Serial Monitor
+      Serial.print("HTTP Code: "); Serial.println(httpResponseCode);
       Serial.println("Balasan Server: " + payload); 
       
-      // Cek apakah ada kata "OFF" dari Laravel
-      if (payload.indexOf("\"OFF\"") > 0) {
+      // Cek apakah ada kata "OFF" dari Web Laravel Anda
+      if (payload.indexOf("\"OFF\"") > 0 || payload.indexOf("OFF") > 0) {
         buzzerAllowed = false; // Matikan Buzzer
       } else {
         buzzerAllowed = true;  // Nyalakan Buzzer
       }
+    } else {
+      Serial.print("Gagal Kirim Data. HTTP Error code: ");
+      Serial.println(httpResponseCode);
     }
     http.end();
+  } else {
+    Serial.println("WiFi Disconnected");
   }
 
-  // 3. BARU TAMPILKAN KE LCD & BUNYIKAN BUZZER (Sesuai Izin Server)
+  // 3. TAMPILKAN KE LCD & BUNYIKAN BUZZER
   if (distance < 50) {
     lcd.clear();
     lcd.setCursor(0,0);
