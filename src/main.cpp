@@ -50,9 +50,7 @@ void setup() {
 
 wm.resetSettings(); // reset dulu (opsional)
 
-if (!wm.autoConnect("ESP32-PINTU")) {
-  ESP.restart();
-}
+
 
   // Auto connect WiFi
   if (!wm.autoConnect("ESP32-PINTU")) {
