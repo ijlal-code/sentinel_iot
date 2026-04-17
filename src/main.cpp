@@ -22,14 +22,29 @@ FirebaseData fbdo;
 FirebaseAuth auth;
 FirebaseConfig config;
 
-long duration;
 float distance;
-
 bool buzzerAllowed = true;
 
-// 🔥 TEXT PER KONDISI
 String textNear = "";
 String textFar = "";
+
+// 🔥 fungsi split teks ke LCD
+void printLCD(String text){
+  lcd.clear();
+
+  String line1 = text.substring(0,16);
+  String line2 = "";
+
+  if(text.length() > 16){
+    line2 = text.substring(16,32);
+  }
+
+  lcd.setCursor(0,0);
+  lcd.print(line1);
+
+  lcd.setCursor(0,1);
+  lcd.print(line2);
+}
 
 // NTP
 const char* ntpServer = "pool.ntp.org";
@@ -51,24 +66,18 @@ void setup() {
   pinMode(ECHO, INPUT);
   pinMode(BUZZER, OUTPUT);
 
-  Wire.begin(21, 22);
+  Wire.begin(21,22);
   lcd.init();
   lcd.backlight();
 
-  // 🔥 LCD STATUS WIFI
-  lcd.setCursor(0,0);
-  lcd.print("Menghubungkan");
-  lcd.setCursor(0,1);
-  lcd.print("WiFi...");
+  printLCD("Menghubungkan WiFi...");
 
   WiFiManager wm;
   if (!wm.autoConnect("ESP32-PINTU")) {
     ESP.restart();
   }
 
-  lcd.clear();
-  lcd.setCursor(0,0);
-  lcd.print("WiFi Connected");
+  printLCD("WiFi Connected");
 
   configTime(gmtOffset_sec, 0, ntpServer);
 
@@ -82,19 +91,18 @@ void setup() {
 
 void loop() {
 
-  // SENSOR
+  // sensor
   digitalWrite(TRIG, LOW);
   delayMicroseconds(2);
   digitalWrite(TRIG, HIGH);
   delayMicroseconds(10);
   digitalWrite(TRIG, LOW);
 
-  duration = pulseIn(ECHO, HIGH);
+  long duration = pulseIn(ECHO, HIGH);
   distance = duration * 0.034 / 2;
 
-  String statusPintu = (distance < 50) ? "ADA ORANG" : "AMAN";
+  String status = (distance < 50) ? "ADA ORANG" : "AMAN";
 
-  // 🔥 AMBIL DATA DARI WEB
   Firebase.RTDB.getString(&fbdo, "/monitoring/buzzer_state");
   buzzerAllowed = fbdo.stringData() == "ON";
 
@@ -104,38 +112,36 @@ void loop() {
   Firebase.RTDB.getString(&fbdo, "/monitoring/text_far");
   textFar = fbdo.stringData();
 
-  // 🔥 REALTIME
   Firebase.RTDB.setFloat(&fbdo, "/monitoring/realtime/jarak", distance);
-  Firebase.RTDB.setString(&fbdo, "/monitoring/realtime/status", statusPintu);
+  Firebase.RTDB.setString(&fbdo, "/monitoring/realtime/status", status);
 
-  // 🔥 HISTORY
   FirebaseJson json;
   json.set("jarak", distance);
-  json.set("status", statusPintu);
+  json.set("status", status);
   json.set("waktu", getTimeNow());
   Firebase.RTDB.pushJSON(&fbdo, "/monitoring/history", &json);
 
-  // 🔥 LCD LOGIC
-  lcd.clear();
+  // LCD
+  if(distance < 50){
+    printLCD(textNear != "" ? textNear : "ADA ORANG");
 
-  if (distance < 50) {
-    lcd.setCursor(0,0);
-    lcd.print(textNear != "" ? textNear : "ADA ORANG");
-
-    if (!buzzerAllowed) {
+    if(!buzzerAllowed){
       lcd.setCursor(0,1);
       lcd.print("BUZZER OFF");
     }
-  } else {
-    lcd.setCursor(0,0);
-    lcd.print(textFar != "" ? textFar : "AMAN");
-  }
 
-  // 🔥 BUZZER
-  if (distance < 50 && buzzerAllowed) {
-    digitalWrite(BUZZER, HIGH);
-    delay(200);
-    digitalWrite(BUZZER, LOW);
+    // 🔥 buzzer 3x
+    if(buzzerAllowed){
+      for(int i=0;i<3;i++){
+        digitalWrite(BUZZER, HIGH);
+        delay(200);
+        digitalWrite(BUZZER, LOW);
+        delay(200);
+      }
+    }
+
+  }else{
+    printLCD(textFar != "" ? textFar : "AMAN");
   }
 
   delay(3000);
