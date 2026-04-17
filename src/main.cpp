@@ -48,13 +48,11 @@ void setup() {
 
   WiFiManager wm;
 
-  // Reset WiFi kalau tombol ditekan
-  if (digitalRead(RESET_PIN) == LOW) {
-    lcd.clear();
-    lcd.print("Reset WiFi...");
-    wm.resetSettings();
-    delay(2000);
-  }
+wm.resetSettings(); // reset dulu (opsional)
+
+if (!wm.autoConnect("ESP32-PINTU")) {
+  ESP.restart();
+}
 
   // Auto connect WiFi
   if (!wm.autoConnect("ESP32-PINTU")) {
