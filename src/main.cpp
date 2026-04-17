@@ -3,8 +3,8 @@
 #include <LiquidCrystal_I2C.h>
 #include <WiFiManager.h>
 #include <Firebase_ESP_Client.h>
+#include <time.h>
 
-// Helper Firebase
 #include "addons/TokenHelper.h"
 #include "addons/RTDBHelper.h"
 
@@ -12,24 +12,37 @@
 #define TRIG 5
 #define ECHO 18
 #define BUZZER 23
-#define RESET_PIN 0
 
-// Firebase (SUDAH DISESUAIKAN)
 #define FIREBASE_HOST "coba-b57da-default-rtdb.asia-southeast1.firebasedatabase.app"
 #define FIREBASE_API_KEY "AIzaSyBCpmeW6CkGOhhpOlKxBYqpkX_d4m45sFc"
 
-// LCD
 LiquidCrystal_I2C lcd(0x27, 16, 2);
 
-// Firebase object
 FirebaseData fbdo;
 FirebaseAuth auth;
 FirebaseConfig config;
 
-// Variabel
 long duration;
 float distance;
+
 bool buzzerAllowed = true;
+
+// 🔥 TEXT PER KONDISI
+String textNear = "";
+String textFar = "";
+
+// NTP
+const char* ntpServer = "pool.ntp.org";
+const long gmtOffset_sec = 8 * 3600;
+
+String getTimeNow() {
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo)) return "-";
+
+  char buffer[30];
+  strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &timeinfo);
+  return String(buffer);
+}
 
 void setup() {
   Serial.begin(115200);
@@ -37,54 +50,43 @@ void setup() {
   pinMode(TRIG, OUTPUT);
   pinMode(ECHO, INPUT);
   pinMode(BUZZER, OUTPUT);
-  pinMode(RESET_PIN, INPUT_PULLUP);
 
   Wire.begin(21, 22);
   lcd.init();
   lcd.backlight();
 
+  // 🔥 LCD STATUS WIFI
   lcd.setCursor(0,0);
-  lcd.print("Setup WiFi...");
+  lcd.print("Menghubungkan");
+  lcd.setCursor(0,1);
+  lcd.print("WiFi...");
 
   WiFiManager wm;
-
-wm.resetSettings(); // reset dulu (opsional)
-
-
-
-  // Auto connect WiFi
   if (!wm.autoConnect("ESP32-PINTU")) {
     ESP.restart();
   }
 
   lcd.clear();
-  lcd.print("WiFi Connected!");
+  lcd.setCursor(0,0);
+  lcd.print("WiFi Connected");
 
-  // Setup Firebase
+  configTime(gmtOffset_sec, 0, ntpServer);
+
   config.api_key = FIREBASE_API_KEY;
   config.database_url = FIREBASE_HOST;
 
-  if (Firebase.signUp(&config, &auth, "", "")) {
-    Serial.println("Firebase Terhubung");
-  } else {
-    Serial.printf("Error: %s\n", config.signer.signupError.message.c_str());
-  }
-
+  Firebase.signUp(&config, &auth, "", "");
   Firebase.begin(&config, &auth);
   Firebase.reconnectWiFi(true);
-
-  // Default buzzer ON
-  Firebase.RTDB.setString(&fbdo, "/monitoring/buzzer_state", "ON");
 }
 
 void loop() {
-  // Baca sensor ultrasonik
+
+  // SENSOR
   digitalWrite(TRIG, LOW);
   delayMicroseconds(2);
-
   digitalWrite(TRIG, HIGH);
   delayMicroseconds(10);
-
   digitalWrite(TRIG, LOW);
 
   duration = pulseIn(ECHO, HIGH);
@@ -92,43 +94,49 @@ void loop() {
 
   String statusPintu = (distance < 50) ? "ADA ORANG" : "AMAN";
 
-  // Kirim ke Firebase
-  if (Firebase.ready()) {
-    Firebase.RTDB.setFloat(&fbdo, "/monitoring/jarak", distance);
-    Firebase.RTDB.setString(&fbdo, "/monitoring/status", statusPintu);
+  // 🔥 AMBIL DATA DARI WEB
+  Firebase.RTDB.getString(&fbdo, "/monitoring/buzzer_state");
+  buzzerAllowed = fbdo.stringData() == "ON";
 
-    // Ambil status buzzer dari web
-    if (Firebase.RTDB.getString(&fbdo, "/monitoring/buzzer_state")) {
-      String state = fbdo.stringData();
-      buzzerAllowed = (state == "OFF") ? false : true;
-    }
-  }
+  Firebase.RTDB.getString(&fbdo, "/monitoring/text_near");
+  textNear = fbdo.stringData();
 
-  // Tampilkan ke LCD + buzzer
+  Firebase.RTDB.getString(&fbdo, "/monitoring/text_far");
+  textFar = fbdo.stringData();
+
+  // 🔥 REALTIME
+  Firebase.RTDB.setFloat(&fbdo, "/monitoring/realtime/jarak", distance);
+  Firebase.RTDB.setString(&fbdo, "/monitoring/realtime/status", statusPintu);
+
+  // 🔥 HISTORY
+  FirebaseJson json;
+  json.set("jarak", distance);
+  json.set("status", statusPintu);
+  json.set("waktu", getTimeNow());
+  Firebase.RTDB.pushJSON(&fbdo, "/monitoring/history", &json);
+
+  // 🔥 LCD LOGIC
   lcd.clear();
 
   if (distance < 50) {
     lcd.setCursor(0,0);
-    lcd.print("ADA ORANG!");
+    lcd.print(textNear != "" ? textNear : "ADA ORANG");
 
-    if (buzzerAllowed) {
-      for(int i = 0; i < 3; i++){
-        digitalWrite(BUZZER, HIGH);
-        delay(200);
-        digitalWrite(BUZZER, LOW);
-        delay(200);
-      }
-    } else {
+    if (!buzzerAllowed) {
       lcd.setCursor(0,1);
       lcd.print("BUZZER OFF");
-      delay(800);
     }
-
   } else {
     lcd.setCursor(0,0);
-    lcd.print("AMAN");
+    lcd.print(textFar != "" ? textFar : "AMAN");
+  }
+
+  // 🔥 BUZZER
+  if (distance < 50 && buzzerAllowed) {
+    digitalWrite(BUZZER, HIGH);
+    delay(200);
     digitalWrite(BUZZER, LOW);
   }
 
-  delay(500); // lebih cepat realtime
+  delay(3000);
 }
